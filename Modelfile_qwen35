@@ -1,0 +1,4 @@
+FROM C:/Users/bhand/.lmstudio/models/lmstudio-community/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf
+
+PARAMETER num_ctx 4096
+PARAMETER temperature 0.30

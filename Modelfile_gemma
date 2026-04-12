@@ -1,0 +1,4 @@
+FROM C:/Users/bhand/.lmstudio/models/lmstudio-community/TrevorJS/gemma-4-26B-A4B-it-uncensored-GGUF/gemma-4-26B-A4B-it-uncensored-Q4_K_M.gguf
+
+PARAMETER num_ctx 16384
+PARAMETER temperature 0.65

@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.venv/
+venv/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Runtime logs and temp
+*.log
+*.tmp
+
+# Local state and personal saves
+council_states/*.json
+!council_states/.gitkeep
+
+# Local test/debug helpers
+test_run.py

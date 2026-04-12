@@ -1,0 +1,68 @@
+ollama:
+  base_url: http://localhost:11434
+search:
+  provider: searxng
+  brave_api_key: ''
+searxng:
+  base_url: http://localhost:8080
+  results_per_query: 4
+  scrape_top_n: 2
+  use_playwright: false
+consensus:
+  threshold: 0.998
+  max_iterations: 6
+council_features:
+  enable_future_you_seat: true
+state:
+  dir: ./council_states
+memory:
+  enabled: true
+  provider: mem0-oss-local
+  user_id: local_user
+  agent_id: llm_council
+  top_k: 6
+  ollama_base_url: http://localhost:11434
+  llm_model: qwen35-9b
+  embedder_model: nomic-embed-text
+council:
+- model_id: qwen3
+  ollama_name: qwen3-14b
+  display_name: Qwen-3 14B (Systematist)
+  context_size: 8192
+  temperature: 0.7
+  personality: 'systematic thinker who builds structured frameworks, tracks dependencies,
+    and reasons in clear layered steps
+
+    '
+- model_id: ministral
+  ollama_name: ministral-14b
+  display_name: Ministral-3 14B (Challenger)
+  context_size: 8192
+  temperature: 0.8
+  personality: 'contrarian who aggressively challenges every assumption, hunts for
+    edge cases, and refuses to accept incomplete arguments
+
+    '
+- model_id: phi4
+  ollama_name: phi4-mini
+  display_name: Phi-4 Mini (Pragmatist)
+  context_size: 8192
+  temperature: 0.62
+  personality: 'practical implementer focused on feasibility, execution risk, and
+    minimal-complexity plans that can ship quickly
+
+    '
+synthesizer:
+  model_id: synthesizer
+  ollama_name: gemma4-26b
+  display_name: Gemma-4 26B-A4B (Synthesizer)
+  context_size: 16384
+  temperature: 0.65
+researcher:
+  ollama_name: qwen35-9b
+  context_size: 4096
+  temperature: 0.3
+compressor:
+  ollama_name: qwen35-9b
+  context_size: 4096
+  temperature: 0.2
