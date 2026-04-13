@@ -1,12 +1,13 @@
-# LLM Council — Autonomous Research Agent with Fact Verification
+# LLM Council — Autonomous Research Agent with Fact Verification & Tutor Mode
 
-A production-grade, VRAM-efficient multi-model reasoning system with **autonomous deep research**, **multi-modal document ingestion**, and **automated fact verification**. Models load and unload sequentially — you never need more VRAM than a single model requires. All shared memory lives in the **Memory Palace**.
+A production-grade, VRAM-efficient multi-model reasoning system with **autonomous deep research**, **multi-modal document ingestion**, **automated fact verification**, and **HF-focused Tutor Mode** for Danish high school exam preparation. Models load and unload sequentially — you never need more VRAM than a single model requires. All shared memory lives in the **Memory Palace**.
 
 ```
 ┌────────────────────────────────────────────────────────────┐
 │                      Memory Palace (JSON)                  │
 │  original_prompt · research · documents · ideas · votes    │
-│  fact_reports · research_trail · citations                 │
+│  fact_reports · research_trail · citations · student_model │
+│  terminology_db · progress_tracker · comprehension_logs    │
 └───────────────────────┬────────────────────────────────────┘
                         │  injected into every model's context
         ┌───────────────┼──────────────────────────┐
@@ -17,11 +18,71 @@ A production-grade, VRAM-efficient multi-model reasoning system with **autonomou
                         │                          │
                         └──── contradiction detection ──┘
                               loop until ≥ 0.998
+
+┌────────────────────────────────────────────────────────────┐
+│                    Tutor Mode Architecture                 │
+│  Prerequisite Engine → Comprehension Loop → Progress Track │
+│  Danish Terminology ↔ HF Exam Sim ↔ Spaced Repetition      │
+└────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 🚀 New Features (v2.0)
+## 🚀 New Features (v3.0 - Tutor Mode Edition)
+
+### 1. Tutor Mode Toggle
+Switch between **Research Assistant** and **Academic Tutor** modes:
+- **Research Mode**: Original autonomous research council for open-ended exploration
+- **Tutorial Mode**: Structured learning with prerequisite checking and comprehension loops
+- **Drill Mode**: Practice problems with immediate feedback
+- **Exam Prep Mode**: Danish HF exam format simulation (mundtlig/skriftlig)
+
+### 2. Prerequisite Chain Detector
+Never get stuck on advanced topics without foundations:
+- **Automatic gap diagnosis** before each session
+- **Strict learning order enforcement** (e.g., functions → derivatives → integrals)
+- **Confidence scoring** for each prerequisite concept
+- **Blocked topic warnings** if foundations are weak
+
+### 3. Comprehension Checking Loop
+The council doesn't just deliver answers — it teaches:
+1. **Explain** concept using multiple approaches
+2. **Question** student with 2-3 targeted problems
+3. **Verify** understanding via council debate
+4. **Re-explain** with different method if mastery < 0.7
+5. **Advance** only when prerequisites are solid
+
+### 4. Danish Academic Terminology Mode
+Bridge the gap between knowing math and speaking Danish math:
+- **Bilingual sidecar output**: Danish term (Nepali concept) every 3rd sentence
+- **Auto-generated glossary** pulled from Mem0 memories
+- **Pronunciation guides** and mathematical definitions
+- **Terminology enforcement** in exam simulations
+
+### 5. HF Progress Tracker
+Real curriculum state persistence (not just memory):
+- **Subject-specific dashboards** (Math A, Physics B, etc.)
+- **Topic status tracking**: `not_started` → `ready` → `in_progress` → `completed`
+- **Dependency graph** unlocks next topics automatically
+- **Weak area identification** (confidence < 0.7)
+
+### 6. HF Exam Simulator
+Practice for Danish HF Math A exams:
+- **Mundtlig eksamen**: Present solution, defend method choice, oral questioning
+- **Skriftlig eksamen**: Time pressure, specific notation requirements, rubric-based grading
+- **Censor personality**: Critical but constructive evaluation based on HF rubrics
+- **Method selection training**: Justify why you chose derivative vs. limit approach
+
+### 7. Spaced Repetition Integration
+Don't forget what you learned 3 weeks ago:
+- **Anki-style card generation** after each session
+- **SM-2 algorithm** scheduling for optimal review timing
+- **Three card types**: Conceptual, Procedural, Danish Terminology
+- **Export to Anki** format for mobile review
+
+---
+
+## 🚀 Enhanced Features (v2.0)
 
 ### 1. Multi-Modal Document Ingestion
 Upload and analyze PDFs, DOCX files, GitHub repositories, and web pages alongside web research.
@@ -48,6 +109,9 @@ Automated contradiction detection and credibility scoring:
 - **Fact-check toggle** for automated verification
 - **New tabs**: Citations, Research Trail, Verification Report
 - **Interactive console** with real-time phase updates
+- **Tutor Dashboard** with progress tracking and vocabulary builder
+- **Study Mode selector** (Research/Tutorial/Drill/Exam Prep)
+- **HF Topic dropdown** for curriculum-aligned sessions
 
 ---
 
@@ -133,6 +197,10 @@ Then open `http://127.0.0.1:7860` in your browser.
 GUI highlights:
 - **File Upload Section**: Drag-and-drop PDFs, DOCX, or paste GitHub URLs
 - **Research Controls**: Toggle Deep-Dive mode (3-5 cycles) and Fact-Checking
+- **Study Mode Selector**: Switch between Research/Tutorial/Drill/Exam Prep modes
+- **HF Topic Dropdown**: Select curriculum-aligned topics (Math A, Physics B, etc.)
+- **Danish Terminology Toggle**: Enable bilingual output for academic language learning
+- **Performance Presets**: Quick-select configurations for speed vs. depth
 - **Live phase trace** (Document Load, Research ×N, Brainstorm, Critique, Synthesis, Vote, Fact-Check)
 - **Consensus timeline chart** across synthesizer iterations
 - **Final answer** with minority report and verification summary
@@ -140,6 +208,8 @@ GUI highlights:
   - **Citations**: Full bibliography with page numbers and confidence scores
   - **Research Trail**: Visual tree of all queries and knowledge gaps filled
   - **Verification Report**: Contradictions detected and resolution narratives
+  - **🎓 Tutor Dashboard**: Progress tracking, weak areas, and next topic suggestions
+  - **Ordbog / Vocabulary**: Auto-generated Danish academic glossary with pronunciations
 - Saved-session browser for replay and inspection
 - Memory Inspector tab for Mem0 search/add/delete operations
 - Search provider selector in runtime controls (`searxng`, `brave`, `duckduckgo`)
@@ -152,6 +222,9 @@ Differentiators now built-in:
 - **Stack-grounded debate**: council reads local stack constraints from files like `requirements.txt`/`package.json`
 - **Future You council seat**: a permanent long-term-consequences voice in every debate
 - **Automated fact-checking**: Real-time contradiction detection with confidence scoring
+- **Tutor Mode pedagogy**: Comprehension loops, prerequisite blocking, and spaced repetition
+- **HF exam preparation**: Danish exam format training with censor evaluation
+- **Bilingual terminology bridging**: Danish terms with Nepali conceptual anchors
 
 ### Interactive CLI
 
@@ -252,6 +325,28 @@ All council members vote on the Synthesizer's proposal.
 
 Results stored in `verification_report` and injected into final synthesis.
 
+### Phase 7 — Tutor Mode (NEW v3.0)
+**Pedagogical Loop for HF Exam Preparation**:
+
+**Tutorial Mode Flow**:
+1. **Prerequisite Check**: Diagnose gaps before teaching topic
+2. **Blocked Advancement**: Prevent moving forward if foundations weak (< 0.7 confidence)
+3. **Multi-Approach Explanation**: Council explains concept using different methods
+4. **Comprehension Questions**: 2-3 targeted problems to verify understanding
+5. **Council Debate on Student Answers**: Verify if student truly understands
+6. **Re-explanation if Needed**: Different council member takes lead with new approach
+7. **Progress Update**: Mark topic as `completed` only when mastery demonstrated
+8. **Anki Card Generation**: Create spaced repetition cards for long-term retention
+
+**Exam Prep Mode Flow**:
+1. **Mundtlig Simulation**: Student presents solution, defends method choice
+2. **Censor Evaluation**: HF Examiner model grades based on Danish rubrics
+3. **Feedback Loop**: Identify weaknesses in reasoning or communication
+4. **Skriftlig Simulation**: Time-pressure calculation with notation requirements
+5. **Terminology Enforcement**: Require correct Danish mathematical terms
+
+Results stored in `student_model`, `progress_tracker`, and `terminology_db`.
+
 ### Context Compression
 When the discussion log grows beyond 15 entries, a lightweight compressor
 summarizes it into a dense paragraph, preventing context blowout in the Synthesizer.
@@ -269,6 +364,14 @@ from core.model_interface import ModelConfig
 from tools.web_tools import ResearchAgent
 from tools.document_tools import DocumentIngestionEngine
 from tools.fact_verification import FactVerificationEngine
+# NEW in v3.0: Tutor Mode components
+from tools.academic_tools import (
+    PrerequisiteEngine,
+    ComprehensionChecker,
+    HFTerminologyManager,
+    HFProgressTracker,
+    HFExamSimulator
+)
 ```
 
 Example model entry:
@@ -285,6 +388,43 @@ ModelConfig(
 )
 ```
 
+### Tutor Mode Council Configuration (v3.0)
+
+Add specialized council members for academic tutoring in `config.yaml`:
+
+```yaml
+academic_rehab:
+  tutor_council:
+    - model_id: "foundations"      # Prerequisites Guardian
+      ollama_name: "qwen3:8b"
+      personality: "Strict diagnostic tutor. Verify prerequisites before answering."
+      
+    - model_id: "examiner"         # HF Examiner
+      ollama_name: "gemma4:9b"
+      personality: "Danish HF censor. Evaluate based on HF rubrics."
+      
+    - model_id: "explainer"        # Simple Explainer
+      ollama_name: "phi4-mini"
+      personality: "Explain using everyday analogies. Focus on intuition."
+      
+  language_bridge:
+    native: "Nepali"      # For conceptual analogies
+    target: "Danish"      # For academic terminology
+    fallback: "English"
+    
+  curriculum:
+    math_a:
+      - topic: "functions"
+        prerequisites: []
+        status: "completed"
+      - topic: "derivatives"
+        prerequisites: ["functions"]
+        status: "in_progress"
+      - topic: "integrals"
+        prerequisites: ["derivatives"]
+        status: "blocked"
+```
+
 ---
 
 ## State Files
@@ -297,6 +437,13 @@ New fields in v2.0:
 - `research_trail`: Tree structure of all queries and knowledge gaps
 - `verification_report`: Claim-level verification with confidence scores
 - `citation_index`: Bibliography with page numbers and source types
+
+New fields in v3.0 (Tutor Mode):
+- `student_model`: User's mastery levels per concept with confidence scores
+- `progress_tracker`: Curriculum state (not_started/ready/in_progress/completed/blocked)
+- `terminology_db`: Danish academic terms with Nepali bridges and pronunciations
+- `comprehension_logs`: Question-answer history for learning verification
+- `anki_cards`: Generated spaced repetition cards with SM-2 scheduling data
 
 ## GitHub Upload Notes
 
@@ -361,6 +508,10 @@ git push
 | **Deeper research** | Enable `--deep-dive` with `--research-depth 5` |
 | **Stricter fact-checking** | Enable `--fact-check` and lower `verification.confidence_threshold` |
 | **Document-heavy analysis** | Use `--documents` with multiple PDFs + `--document-ingestion` |
+| **Tutor Mode: Faster sessions** | Use lighter council models (qwen3:8b, phi4-mini) |
+| **Tutor Mode: Stricter pedagogy** | Lower comprehension threshold to 0.75 in config |
+| **Tutor Mode: More practice** | Enable `generate_review_questions: true` for Anki export |
+| **HF Exam Prep** | Set `exam_mode: "mundtlig"` or `"skriftlig"` in GUI |
 
 ---
 
@@ -375,11 +526,14 @@ git push
 - Runtime settings are loaded from `config.yaml` through `build_orchestrator_from_config()`,
   used by both `orchestrator.py` (CLI) and `gui.py` (web UI).
 - **New in v2.0**: Async/await refactoring for 3x performance gain in document parsing and fact verification.
+- **New in v3.0**: Tutor Mode components run sequentially with research council to maintain VRAM efficiency.
+- **Mem0 Integration**: Long-term memory stores both research context AND student progress data.
 
 ---
 
 ## Performance Benchmarks
 
+### Research Mode (v2.0)
 | Metric | v1.0 (Original) | v2.0 (Current) | Improvement |
 |--------|----------------|----------------|-------------|
 | Sources Analyzed | 8 | 20-30 | +250% |
@@ -388,6 +542,17 @@ git push
 | Fact-Checking | Manual | Automated | New |
 | Test Coverage | ~40% | 85% | +112% |
 | Execution Time (Deep-Dive) | N/A | ~3-5 min | Baseline |
+
+### Tutor Mode (v3.0)
+| Metric | Traditional Tutoring | LLM Council Tutor Mode | Improvement |
+|--------|---------------------|------------------------|-------------|
+| Prerequisite Checking | Manual diagnostic test | Automatic gap detection | Instant |
+| Comprehension Verification | Teacher intuition | Council debate + multi-question | More rigorous |
+| Progress Tracking | Paper records/spreadsheet | Mem0 persistence + dashboard | Real-time |
+| Terminology Bridging | Dictionary lookup | Bilingual sidecar output | Contextual |
+| Exam Simulation | Scheduled mock exams | On-demand practice | Unlimited |
+| Spaced Repetition | Manual Anki creation | Auto-generated cards | Time-saving |
+| Availability | Office hours only | 24/7 access | Always available |
 
 ---
 
@@ -405,8 +570,10 @@ This project builds on the following open-source tools and libraries:
 - **New**: [PyMuPDF](https://github.com/pymupdf/PyMuPDF) — PDF parsing and text extraction.
 - **New**: [python-docx](https://github.com/python-openxml/python-docx) — DOCX file handling.
 - **New**: [BeautifulSoup4](https://www.crummy.com/software/BeautifulSoup/) — HTML/XML parsing.
+- **New v3.0**: HF Math A curriculum data and Danish academic terminology databases.
 
 And thanks to the maintainers and communities behind:
 
 - [DuckDuckGo](https://duckduckgo.com/) — no-key search provider option.
 - [Brave Search API](https://brave.com/search/api/) — optional API-based search provider.
+- **Danish Ministry of Education** — HF Math A syllabus and competency goals (kompetencemål).
