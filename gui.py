@@ -642,6 +642,87 @@ def _placeholder(msg: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Performance Presets Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+
+def apply_performance_preset(preset_name: str) -> dict:
+    """
+    Apply performance preset configurations for different use cases.
+    
+    Presets optimize multiple parameters together for common scenarios:
+    - Fast Mode: Lower threshold, fewer iterations, minimal scraping
+    - Balanced: Default settings for general use
+    - Deep Research: More iterations, deeper scraping, higher research depth
+    - Document Analysis: Heavy document ingestion, thorough verification
+    - Tutor Mode: Educational focus with comprehension checks
+    """
+    presets = {
+        "fast": {
+            "threshold": 0.990,
+            "max_iter": 3,
+            "use_playwright": False,
+            "document_ingestion": False,
+            "deep_dive": False,
+            "fact_check": False,
+            "results_per_query": 3,
+            "scrape_top_n": 1,
+            "research_depth": 0,
+            "fact_check_threshold": 0.90,
+        },
+        "balanced": {
+            "threshold": 0.998,
+            "max_iter": 6,
+            "use_playwright": False,
+            "document_ingestion": False,
+            "deep_dive": True,
+            "fact_check": False,
+            "results_per_query": 4,
+            "scrape_top_n": 2,
+            "research_depth": 2,
+            "fact_check_threshold": 0.85,
+        },
+        "deep": {
+            "threshold": 0.999,
+            "max_iter": 8,
+            "use_playwright": True,
+            "document_ingestion": False,
+            "deep_dive": True,
+            "fact_check": True,
+            "results_per_query": 6,
+            "scrape_top_n": 4,
+            "research_depth": 5,
+            "fact_check_threshold": 0.75,
+        },
+        "document": {
+            "threshold": 0.995,
+            "max_iter": 5,
+            "use_playwright": True,
+            "document_ingestion": True,
+            "deep_dive": False,
+            "fact_check": True,
+            "results_per_query": 4,
+            "scrape_top_n": 3,
+            "research_depth": 1,
+            "fact_check_threshold": 0.80,
+        },
+        "tutor": {
+            "threshold": 0.995,
+            "max_iter": 4,
+            "use_playwright": False,
+            "document_ingestion": False,
+            "deep_dive": True,
+            "fact_check": True,
+            "results_per_query": 4,
+            "scrape_top_n": 2,
+            "research_depth": 3,
+            "fact_check_threshold": 0.80,
+        },
+    }
+    
+    return presets.get(preset_name, presets["balanced"])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Run council (streaming)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -671,6 +752,11 @@ def run_council_stream(
     danish_terminology: bool = True,
     document_files=None,
     document_urls: str = "",
+    performance_preset: str = "balanced",
+    results_per_query: int = 4,
+    scrape_top_n: int = 2,
+    research_depth: int = 2,
+    fact_check_threshold: float = 0.85,
 ):
     if not prompt.strip():
         raise gr.Error("Please provide a prompt before convening the council.")
@@ -697,6 +783,9 @@ def run_council_stream(
         urls = [u.strip() for u in document_urls.split('\n') if u.strip()]
         documents_to_process.extend(urls)
 
+    # Apply performance preset overrides
+    preset_overrides = apply_performance_preset(performance_preset)
+    
     orchestrator = build_orchestrator_from_config(
         config_path=CONFIG_PATH,
         overrides={
@@ -704,9 +793,9 @@ def run_council_stream(
             "searxng_url": searxng_url,
             "search_provider": search_provider,
             "search_brave_api_key": search_brave_api_key,
-            "consensus_threshold": threshold,
-            "max_iterations": max_iter,
-            "use_playwright": use_playwright,
+            "consensus_threshold": preset_overrides.get("threshold", threshold),
+            "max_iterations": preset_overrides.get("max_iter", max_iter),
+            "use_playwright": preset_overrides.get("use_playwright", use_playwright),
             "state_dir": str(target_state_dir),
             "memory_enabled": memory_enabled,
             "memory_user_id": memory_user_id,
@@ -716,9 +805,13 @@ def run_council_stream(
             "memory_llm_model": memory_llm_model,
             "memory_embedder_model": memory_embedder_model,
             "progress_callback": on_progress,
-            "document_ingestion_enabled": document_ingestion,
-            "deep_dive_enabled": deep_dive,
-            "fact_check_enabled": fact_check,
+            "document_ingestion_enabled": preset_overrides.get("document_ingestion", document_ingestion),
+            "deep_dive_enabled": preset_overrides.get("deep_dive", deep_dive),
+            "fact_check_enabled": preset_overrides.get("fact_check", fact_check),
+            "results_per_query": preset_overrides.get("results_per_query", results_per_query),
+            "scrape_top_n": preset_overrides.get("scrape_top_n", scrape_top_n),
+            "research_depth": preset_overrides.get("research_depth", research_depth),
+            "fact_check_threshold": preset_overrides.get("fact_check_threshold", fact_check_threshold),
         },
     )
     
@@ -1640,9 +1733,26 @@ def build_app() -> gr.Blocks:
                         value="",
                         type="password",
                     )
+                    
+                    # Performance Presets - Quick Configuration
+                    with gr.Row():
+                        performance_preset = gr.Radio(
+                            choices=[
+                                ("⚡ Fast Mode (Quick Answers)", "fast"),
+                                ("🎯 Balanced (Default)", "balanced"),
+                                ("🔬 Deep Research (Comprehensive)", "deep"),
+                                ("📚 Document Analysis (PDF-heavy)", "document"),
+                                ("🎓 Tutor Mode (Educational)", "tutor")
+                            ],
+                            value="balanced",
+                            label="Performance Preset",
+                            info="Quick-select optimized configurations for different use cases"
+                        )
+                    
                     use_playwright = gr.Checkbox(
                         label="Enable Playwright enrichment",
                         value=False,
+                        info="Scrape full webpage content (slower but deeper)"
                     )
                     
                     # Phase 1-3 Feature Toggles
@@ -1697,6 +1807,7 @@ def build_app() -> gr.Blocks:
                             info="Enforce Danish academic terms"
                         )
                     
+                    # Advanced Parameters (auto-adjusted by preset)
                     with gr.Row():
                         threshold = gr.Slider(
                             label="Consensus Threshold",
@@ -1704,6 +1815,7 @@ def build_app() -> gr.Blocks:
                             maximum=1.0,
                             step=0.001,
                             value=0.998,
+                            info="Higher = stricter consensus required"
                         )
                         max_iter = gr.Slider(
                             label="Max Iterations",
@@ -1711,7 +1823,45 @@ def build_app() -> gr.Blocks:
                             maximum=10,
                             step=1,
                             value=6,
+                            info="More iterations = better refinement but slower"
                         )
+                    
+                    with gr.Row():
+                        results_per_query = gr.Slider(
+                            label="Search Results per Query",
+                            minimum=2,
+                            maximum=10,
+                            step=1,
+                            value=4,
+                            info="Number of web results per search query"
+                        )
+                        scrape_top_n = gr.Slider(
+                            label="Pages to Scrape",
+                            minimum=1,
+                            maximum=8,
+                            step=1,
+                            value=2,
+                            info="Full content extraction from top N results"
+                        )
+                    
+                    with gr.Row():
+                        research_depth = gr.Slider(
+                            label="Deep-Dive Iterations",
+                            minimum=0,
+                            maximum=5,
+                            step=1,
+                            value=2,
+                            info="Follow-up search rounds for gap-filling"
+                        )
+                        fact_check_threshold = gr.Slider(
+                            label="Fact-Check Confidence",
+                            minimum=0.5,
+                            maximum=0.99,
+                            step=0.01,
+                            value=0.85,
+                            info="Lower = stricter fact verification"
+                        )
+                    
                     state_dir = gr.Textbox(
                         label="State Directory",
                         value=str(DEFAULT_STATE_DIR),
@@ -1926,6 +2076,11 @@ def build_app() -> gr.Blocks:
                 danish_terminology,
                 document_files,
                 document_urls,
+                performance_preset,
+                results_per_query,
+                scrape_top_n,
+                research_depth,
+                fact_check_threshold,
             ],
             outputs=[
                 final_answer,
