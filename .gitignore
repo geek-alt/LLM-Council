@@ -1,26 +1,38 @@
+```
 # Python
 __pycache__/
-*.py[cod]
+*.pyc
 *.pyo
 *.pyd
-*.so
-*.egg-info/
+
+# Dependencies
 .venv/
 venv/
+env/
+.env
+.env.*
+.env.local
 
-# IDE / OS
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Editors
 .vscode/
 .idea/
-.DS_Store
-Thumbs.db
+*.swp
+*.swo
 
-# Runtime logs and temp
+# Logs
 *.log
+
+# Coverage
+.coverage
+coverage/
+htmlcov/
+
+# Temp files
 *.tmp
-
-# Local state and personal saves
-council_states/*.json
-!council_states/.gitkeep
-
-# Local test/debug helpers
-test_run.py
+*.temp
+```

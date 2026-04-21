@@ -642,6 +642,87 @@ def _placeholder(msg: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Performance Presets Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+
+def apply_performance_preset(preset_name: str) -> dict:
+    """
+    Apply performance preset configurations for different use cases.
+    
+    Presets optimize multiple parameters together for common scenarios:
+    - Fast Mode: Lower threshold, fewer iterations, minimal scraping
+    - Balanced: Default settings for general use
+    - Deep Research: More iterations, deeper scraping, higher research depth
+    - Document Analysis: Heavy document ingestion, thorough verification
+    - Tutor Mode: Educational focus with comprehension checks
+    """
+    presets = {
+        "fast": {
+            "threshold": 0.990,
+            "max_iter": 3,
+            "use_playwright": False,
+            "document_ingestion": False,
+            "deep_dive": False,
+            "fact_check": False,
+            "results_per_query": 3,
+            "scrape_top_n": 1,
+            "research_depth": 0,
+            "fact_check_threshold": 0.90,
+        },
+        "balanced": {
+            "threshold": 0.998,
+            "max_iter": 6,
+            "use_playwright": False,
+            "document_ingestion": False,
+            "deep_dive": True,
+            "fact_check": False,
+            "results_per_query": 4,
+            "scrape_top_n": 2,
+            "research_depth": 2,
+            "fact_check_threshold": 0.85,
+        },
+        "deep": {
+            "threshold": 0.999,
+            "max_iter": 8,
+            "use_playwright": True,
+            "document_ingestion": False,
+            "deep_dive": True,
+            "fact_check": True,
+            "results_per_query": 6,
+            "scrape_top_n": 4,
+            "research_depth": 5,
+            "fact_check_threshold": 0.75,
+        },
+        "document": {
+            "threshold": 0.995,
+            "max_iter": 5,
+            "use_playwright": True,
+            "document_ingestion": True,
+            "deep_dive": False,
+            "fact_check": True,
+            "results_per_query": 4,
+            "scrape_top_n": 3,
+            "research_depth": 1,
+            "fact_check_threshold": 0.80,
+        },
+        "tutor": {
+            "threshold": 0.995,
+            "max_iter": 4,
+            "use_playwright": False,
+            "document_ingestion": False,
+            "deep_dive": True,
+            "fact_check": True,
+            "results_per_query": 4,
+            "scrape_top_n": 2,
+            "research_depth": 3,
+            "fact_check_threshold": 0.80,
+        },
+    }
+    
+    return presets.get(preset_name, presets["balanced"])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Run council (streaming)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -662,6 +743,20 @@ def run_council_stream(
     memory_ollama_url: str,
     memory_llm_model: str,
     memory_embedder_model: str,
+    document_ingestion: bool = False,
+    deep_dive: bool = False,
+    fact_check: bool = False,
+    tutor_mode: bool = False,
+    study_mode: str = "Research",
+    subject_topic: str = "Math A - Functions",
+    danish_terminology: bool = True,
+    document_files=None,
+    document_urls: str = "",
+    performance_preset: str = "balanced",
+    results_per_query: int = 4,
+    scrape_top_n: int = 2,
+    research_depth: int = 2,
+    fact_check_threshold: float = 0.85,
 ):
     if not prompt.strip():
         raise gr.Error("Please provide a prompt before convening the council.")
@@ -676,6 +771,21 @@ def run_council_stream(
     def on_progress(payload: dict) -> None:
         events.put(payload)
 
+    # Build document list from files and URLs
+    documents_to_process = []
+    if document_files:
+        if isinstance(document_files, list):
+            documents_to_process.extend([f.name for f in document_files])
+        else:
+            documents_to_process.append(document_files.name)
+    
+    if document_urls and document_urls.strip():
+        urls = [u.strip() for u in document_urls.split('\n') if u.strip()]
+        documents_to_process.extend(urls)
+
+    # Apply performance preset overrides
+    preset_overrides = apply_performance_preset(performance_preset)
+    
     orchestrator = build_orchestrator_from_config(
         config_path=CONFIG_PATH,
         overrides={
@@ -683,9 +793,9 @@ def run_council_stream(
             "searxng_url": searxng_url,
             "search_provider": search_provider,
             "search_brave_api_key": search_brave_api_key,
-            "consensus_threshold": threshold,
-            "max_iterations": max_iter,
-            "use_playwright": use_playwright,
+            "consensus_threshold": preset_overrides.get("threshold", threshold),
+            "max_iterations": preset_overrides.get("max_iter", max_iter),
+            "use_playwright": preset_overrides.get("use_playwright", use_playwright),
             "state_dir": str(target_state_dir),
             "memory_enabled": memory_enabled,
             "memory_user_id": memory_user_id,
@@ -695,8 +805,23 @@ def run_council_stream(
             "memory_llm_model": memory_llm_model,
             "memory_embedder_model": memory_embedder_model,
             "progress_callback": on_progress,
+            "document_ingestion_enabled": preset_overrides.get("document_ingestion", document_ingestion),
+            "deep_dive_enabled": preset_overrides.get("deep_dive", deep_dive),
+            "fact_check_enabled": preset_overrides.get("fact_check", fact_check),
+            "results_per_query": preset_overrides.get("results_per_query", results_per_query),
+            "scrape_top_n": preset_overrides.get("scrape_top_n", scrape_top_n),
+            "research_depth": preset_overrides.get("research_depth", research_depth),
+            "fact_check_threshold": preset_overrides.get("fact_check_threshold", fact_check_threshold),
+            "tutor_mode_enabled": tutor_mode,
         },
     )
+    
+    # Ingest documents if provided and enabled
+    if documents_to_process and document_ingestion:
+        try:
+            orchestrator.doc_engine.ingest_multiple(documents_to_process)
+        except Exception as e:
+            trace_lines.append(f"[WARNING] Document ingestion issue: {str(e)}")
 
     def _worker() -> None:
         try:
@@ -708,6 +833,91 @@ def run_council_stream(
     worker.start()
 
     sessions_now = _list_session_files(target_state_dir)
+    
+    # Tutor mode initialization
+    tutor_dashboard_html = ""
+    prereq_status_md = "**Prerequisites:** Not checked yet"
+    comprehension_md = "**Comprehension:** No checks performed yet"
+    terminology_quiz_html = ""
+    next_topic_md = "_Suggested next topic will appear after enabling tutor mode._"
+    
+    if tutor_mode:
+        try:
+            from tools.academic_tools import (
+                PrerequisiteEngine, HFProgressTracker, 
+                HFTerminologyManager, ComprehensionChecker,
+                HF_MATH_A_CURRICULUM
+            )
+            
+            # Initialize tutor components
+            prereq_engine = PrerequisiteEngine()
+            progress_tracker = HFProgressTracker(user_id=memory_user_id)
+            term_manager = HFTerminologyManager(native_language="Nepali")
+            
+            # Map subject_topic to curriculum key
+            topic_key = subject_topic.lower().replace("math a - ", "").replace(" ", "_")
+            
+            # Diagnose prerequisites
+            diag = prereq_engine.diagnose_gaps(topic_key)
+            if "error" not in diag:
+                learning_path = diag.get("learning_path", [])
+                prereq_status_md = f"**Learning Path for {topic_key}:**\n\n"
+                for i, step in enumerate(learning_path):
+                    status = "✓" if step.get("mastery_required") else "○"
+                    prereq_status_md += f"{status} **{step['concept']}** ({step['level']})\n"
+                
+                # Generate terminology quiz
+                quiz = term_manager.generate_terminology_quiz(topic_key, num_questions=3)
+                terminology_quiz_html = "<h4>Danish Terminology Quiz</h4>"
+                for q in quiz:
+                    terminology_quiz_html += f"""
+                    <div style='padding:12px;margin:8px 0;background:#1b1d18;border:1px solid #2c2f28;'>
+                        <p style='color:#e0dbd0;font-family:"Martian Mono",monospace;font-size:12px;'>
+                            <strong>Q:</strong> {q['question']}
+                        </p>
+                        <p style='color:#5e6358;font-size:11px;margin-top:6px;'>
+                            <em>Hint: {q['hint']}</em>
+                        </p>
+                        <p style='color:#1a9e84;font-size:11px;margin-top:4px;'>
+                            <strong>A:</strong> {q['answer']} ({q['pronunciation']})
+                        </p>
+                    </div>
+                    """
+            
+            # Get next topic suggestion
+            suggestion = progress_tracker.suggest_next_topic()
+            if suggestion.get("suggested_topic"):
+                next_topic_md = f"""
+                **Suggested Next Topic:** {suggestion['suggested_topic']}
+                
+                **Reason:** {suggestion['reason']}
+                
+                **Prerequisites:** {suggestion['prerequisites_status']}
+                """
+            
+            # Build tutor dashboard HTML
+            tutor_dashboard_html = f"""
+            <div style='font-family:"Martian Mono",monospace;padding:16px;'>
+                <div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:20px;'>
+                    <div style='padding:16px;background:#1b1d18;border:1px solid #2c2f28;border-left:3px solid #1a9e84;'>
+                        <div style='font-size:10px;color:#5e6358;text-transform:uppercase;'>Study Mode</div>
+                        <div style='font-size:18px;color:#e0dbd0;margin-top:4px;'>{study_mode}</div>
+                    </div>
+                    <div style='padding:16px;background:#1b1d18;border:1px solid #2c2f28;border-left:3px solid #c49215;'>
+                        <div style='font-size:10px;color:#5e6358;text-transform:uppercase;'>Topic</div>
+                        <div style='font-size:18px;color:#e0dbd0;margin-top:4px;'>{topic_key}</div>
+                    </div>
+                    <div style='padding:16px;background:#1b1d18;border:1px solid #2c2f28;border-left:3px solid #3a78c4;'>
+                        <div style='font-size:10px;color:#5e6358;text-transform:uppercase;'>Danish Terms</div>
+                        <div style='font-size:18px;color:#e0dbd0;margin-top:4px;'>{"Enforced" if danish_terminology else "Disabled"}</div>
+                    </div>
+                </div>
+            </div>
+            """
+            
+        except Exception as e:
+            prereq_status_md = f"**Error initializing tutor mode:** {str(e)}"
+    
     yield (
         "Convening council session…",
         "### Session Snapshot\n- In progress",
@@ -718,6 +928,11 @@ def run_council_stream(
         _placeholder("Adversarial evidence split will appear after research completes."),
         "No minority report yet.",
         _placeholder("Decision signals will appear after voting completes."),
+        tutor_dashboard_html if tutor_mode else _placeholder("Enable Tutor Mode to see progress tracking."),
+        prereq_status_md,
+        comprehension_md,
+        terminology_quiz_html if tutor_mode else _placeholder("Danish terminology quiz appears here when enabled."),
+        next_topic_md,
     )
 
     while worker.is_alive() or not events.empty():
@@ -737,6 +952,11 @@ def run_council_stream(
                 _placeholder("Adversarial evidence split will appear after run completion."),
                 "No minority report yet.",
                 _placeholder("Decision signals will appear after voting completes."),
+                tutor_dashboard_html if tutor_mode else _placeholder("Enable Tutor Mode to see progress tracking."),
+                prereq_status_md,
+                comprehension_md,
+                terminology_quiz_html if tutor_mode else _placeholder("Danish terminology quiz appears here when enabled."),
+                next_topic_md,
             )
         except queue.Empty:
             continue
@@ -776,6 +996,11 @@ def run_council_stream(
         _build_adversarial_evidence_html(state_json),
         _build_minority_report_markdown(state_json),
         _build_decision_signals_html(state_json),
+        tutor_dashboard_html if tutor_mode else _placeholder("Enable Tutor Mode to see progress tracking."),
+        prereq_status_md,
+        comprehension_md,
+        terminology_quiz_html if tutor_mode else _placeholder("Danish terminology quiz appears here when enabled."),
+        next_topic_md,
     )
 
 
@@ -1509,10 +1734,81 @@ def build_app() -> gr.Blocks:
                         value="",
                         type="password",
                     )
+                    
+                    # Performance Presets - Quick Configuration
+                    with gr.Row():
+                        performance_preset = gr.Radio(
+                            choices=[
+                                ("⚡ Fast Mode (Quick Answers)", "fast"),
+                                ("🎯 Balanced (Default)", "balanced"),
+                                ("🔬 Deep Research (Comprehensive)", "deep"),
+                                ("📚 Document Analysis (PDF-heavy)", "document"),
+                                ("🎓 Tutor Mode (Educational)", "tutor")
+                            ],
+                            value="balanced",
+                            label="Performance Preset",
+                            info="Quick-select optimized configurations for different use cases"
+                        )
+                    
                     use_playwright = gr.Checkbox(
                         label="Enable Playwright enrichment",
                         value=False,
+                        info="Scrape full webpage content (slower but deeper)"
                     )
+                    
+                    # Phase 1-3 Feature Toggles
+                    with gr.Row():
+                        document_ingestion = gr.Checkbox(
+                            label="📄 Document Ingestion",
+                            value=False,
+                            info="Analyze PDFs, DOCX, GitHub repos"
+                        )
+                        deep_dive = gr.Checkbox(
+                            label="🔍 Deep-Dive Research",
+                            value=False,
+                            info="Iterative gap-filling searches"
+                        )
+                        fact_check = gr.Checkbox(
+                            label="✅ Fact Verification",
+                            value=False,
+                            info="Detect contradictions & verify claims"
+                        )
+                    
+                    # Academic Rehabilitation / Tutor Mode Toggle
+                    with gr.Row():
+                        tutor_mode_enabled = gr.Checkbox(
+                            label="🎓 Tutor Mode",
+                            value=False,
+                            info="Enable teaching loop with comprehension checks"
+                        )
+                        study_mode = gr.Radio(
+                            choices=["Research", "Tutorial (Learn)", "Drill (Practice)", "Exam Prep (HF format)"],
+                            value="Research",
+                            label="Study Mode",
+                            interactive=True
+                        )
+                    
+                    with gr.Row():
+                        subject_selector = gr.Dropdown(
+                            choices=[
+                                "Math A - Functions",
+                                "Math A - Derivatives",
+                                "Math A - Integrals", 
+                                "Math A - Probability",
+                                "Math A - Statistics",
+                                "Physics B - Mechanics",
+                                "Physics B - Thermodynamics"
+                            ],
+                            label="HF Topic",
+                            value="Math A - Functions"
+                        )
+                        danish_terminology = gr.Checkbox(
+                            label="🇩🇰 Danish Terminology",
+                            value=True,
+                            info="Enforce Danish academic terms"
+                        )
+                    
+                    # Advanced Parameters (auto-adjusted by preset)
                     with gr.Row():
                         threshold = gr.Slider(
                             label="Consensus Threshold",
@@ -1520,6 +1816,7 @@ def build_app() -> gr.Blocks:
                             maximum=1.0,
                             step=0.001,
                             value=0.998,
+                            info="Higher = stricter consensus required"
                         )
                         max_iter = gr.Slider(
                             label="Max Iterations",
@@ -1527,7 +1824,45 @@ def build_app() -> gr.Blocks:
                             maximum=10,
                             step=1,
                             value=6,
+                            info="More iterations = better refinement but slower"
                         )
+                    
+                    with gr.Row():
+                        results_per_query = gr.Slider(
+                            label="Search Results per Query",
+                            minimum=2,
+                            maximum=10,
+                            step=1,
+                            value=4,
+                            info="Number of web results per search query"
+                        )
+                        scrape_top_n = gr.Slider(
+                            label="Pages to Scrape",
+                            minimum=1,
+                            maximum=8,
+                            step=1,
+                            value=2,
+                            info="Full content extraction from top N results"
+                        )
+                    
+                    with gr.Row():
+                        research_depth = gr.Slider(
+                            label="Deep-Dive Iterations",
+                            minimum=0,
+                            maximum=5,
+                            step=1,
+                            value=2,
+                            info="Follow-up search rounds for gap-filling"
+                        )
+                        fact_check_threshold = gr.Slider(
+                            label="Fact-Check Confidence",
+                            minimum=0.5,
+                            maximum=0.99,
+                            step=0.01,
+                            value=0.85,
+                            info="Lower = stricter fact verification"
+                        )
+                    
                     state_dir = gr.Textbox(
                         label="State Directory",
                         value=str(DEFAULT_STATE_DIR),
@@ -1576,6 +1911,20 @@ def build_app() -> gr.Blocks:
             # ── Right: outputs ─────────────────────────────────────────────
             with gr.Column(scale=7, elem_classes=["panel", "panel-right", "tight"]):
 
+                # Document upload section (Phase 1)
+                with gr.Accordion("📁 Document Upload (Optional)", open=False):
+                    gr.Markdown("Upload PDFs, DOCX, TXT files or paste GitHub repo URLs for analysis")
+                    document_files = gr.File(
+                        label="Upload Documents",
+                        file_types=[".pdf", ".docx", ".txt", ".md", ".rst", ".tex"],
+                        file_count="multiple"
+                    )
+                    document_urls = gr.Textbox(
+                        label="Or paste URLs (GitHub repos, web pages)",
+                        placeholder="https://github.com/user/repo\nhttps://example.com/article",
+                        lines=3
+                    )
+
                 with gr.Tabs():
 
                     with gr.Tab("Verdict"):
@@ -1597,6 +1946,24 @@ def build_app() -> gr.Blocks:
                     with gr.Tab("Evidence"):
                         adversarial_evidence = gr.HTML(
                             _placeholder("No adversarial evidence available yet."),
+                            elem_classes=["scroll-pane"],
+                        )
+
+                    with gr.Tab("📚 Citations & Sources"):
+                        citations_display = gr.HTML(
+                            _placeholder("Citations appear after document ingestion or research."),
+                            elem_classes=["scroll-pane"],
+                        )
+
+                    with gr.Tab("🔍 Research Trail"):
+                        research_trail = gr.HTML(
+                            _placeholder("Deep-dive research iterations appear here."),
+                            elem_classes=["scroll-pane"],
+                        )
+
+                    with gr.Tab("✅ Verification Report"):
+                        verification_report = gr.HTML(
+                            _placeholder("Fact verification results appear after analysis."),
                             elem_classes=["scroll-pane"],
                         )
 
@@ -1646,6 +2013,31 @@ def build_app() -> gr.Blocks:
                             elem_classes=["scroll-pane", "mono-pane"],
                         )
 
+                    # Tutor Mode Tab - Academic Rehabilitation
+                    with gr.Tab("🎓 Tutor Dashboard"):
+                        gr.Markdown("### HF Math A Progress Tracker")
+                        tutor_progress = gr.HTML(
+                            _placeholder("Tutor mode progress appears here. Enable Tutor Mode to start tracking."),
+                            elem_classes=["scroll-pane"],
+                        )
+                        with gr.Row():
+                            prerequisite_status = gr.Markdown(
+                                "**Prerequisites:** Not checked yet",
+                                elem_classes=["scroll-pane"],
+                            )
+                            comprehension_status = gr.Markdown(
+                                "**Comprehension:** No checks performed yet",
+                                elem_classes=["scroll-pane"],
+                            )
+                        terminology_quiz = gr.HTML(
+                            _placeholder("Danish terminology quiz appears here when enabled."),
+                            elem_classes=["scroll-pane"],
+                        )
+                        next_topic_suggestion = gr.Markdown(
+                            "_Suggested next topic will appear after enabling tutor mode._",
+                            elem_classes=["scroll-pane"],
+                        )
+
                 # Session loader row
                 with gr.Row(elem_classes=["session-row"]):
                     session_file = gr.Dropdown(
@@ -1676,6 +2068,20 @@ def build_app() -> gr.Blocks:
                 memory_ollama_url,
                 memory_llm_model,
                 memory_embedder_model,
+                document_ingestion,
+                deep_dive,
+                fact_check,
+                tutor_mode_enabled,
+                study_mode,
+                subject_selector,
+                danish_terminology,
+                document_files,
+                document_urls,
+                performance_preset,
+                results_per_query,
+                scrape_top_n,
+                research_depth,
+                fact_check_threshold,
             ],
             outputs=[
                 final_answer,
@@ -1687,6 +2093,11 @@ def build_app() -> gr.Blocks:
                 adversarial_evidence,
                 minority_report,
                 decision_signals,
+                tutor_progress,
+                prerequisite_status,
+                comprehension_status,
+                terminology_quiz,
+                next_topic_suggestion,
             ],
         )
 

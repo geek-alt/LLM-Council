@@ -28,7 +28,8 @@ from core.prompts import (
     COUNCIL_VOTE_SYSTEM, COUNCIL_VOTE_USER,
     COMPRESSOR_SYSTEM, COMPRESSOR_USER,
 )
-from tools.web_tools import ResearchAgent, SearXNG, BraveSearch, DuckDuckGoSearch, PlaywrightScraper, WebSearchProvider
+from tools.web_tools import ResearchAgent, SearXNG, BraveSearch, DuckDuckGoSearch, PlaywrightScraper, WebSearchProvider, IterativeResearchAgent
+from tools.document_tools import DocumentIngestionEngine, ParsedDocument
 
 logging.basicConfig(
     level=logging.INFO,
@@ -138,6 +139,7 @@ class CouncilOrchestrator:
         project_root: Optional[str]       = None,
         progress_callback: Optional[Callable[[dict[str, Any]], None]] = None,
         memory_manager: Optional[Mem0MemoryManager] = None,
+        document_ingestion_enabled: bool = False,
     ):
         self.council      = council      or DEFAULT_COUNCIL
         self.synthesizer  = synthesizer  or DEFAULT_SYNTHESIZER
@@ -161,6 +163,20 @@ class CouncilOrchestrator:
             playwright = PlaywrightScraper() if use_playwright else None,
             use_playwright_fallback = use_playwright,
         )
+        
+        # Iterative deep-dive research agent (Phase 2 feature)
+        self.iterative_research_agent = IterativeResearchAgent(
+            base_research_agent=self.research,
+            model_client=self.client,
+            researcher_model=self.researcher,
+            max_iterations=2,
+            gap_threshold=0.6,
+        )
+        
+        # Document ingestion engine (Phase 1 feature)
+        self.document_ingestion_enabled = document_ingestion_enabled
+        self.doc_engine = DocumentIngestionEngine() if document_ingestion_enabled else None
+        
         self.threshold     = consensus_threshold
         self.max_iterations = max_iterations
         self.results_per_query = results_per_query
@@ -270,11 +286,283 @@ class CouncilOrchestrator:
         return s
 
     def _recover_vote_from_text(self, raw: str) -> tuple[float, str]:
-        score = self._extract_score_from_text(raw, default=0.5)
-        critique = self._clean_model_text(raw, max_len=500)
-        if self._is_noisy_critique(critique):
-            critique = ""
+        """
+        Ultra-robust fallback for extracting score and critique from malformed vote responses.
+        Uses multiple strategies in sequence to maximize extraction success.
+        """
+        if not raw or not isinstance(raw, str):
+            return 0.5, "Empty or invalid response"
+        
+        text = raw.strip()
+        
+        # Strategy 1: Look for explicit score patterns with various formats
+        score_patterns = [
+            r'"score"\s*[:=]\s*(0(?:\.\d+)?|1(?:\.0+)?)',  # "score": 0.75
+            r'score\s*[:=]\s*(0(?:\.\d+)?|1(?:\.0+)?)',     # score: 0.75
+            r'\bscore\b\s*[:=]\s*(\d+(?:\.\d+)?)',          # score: 75 (will normalize)
+            r'(?:rating|evaluation)\s*[:=]\s*(0?\.\d+|1\.0+|\d+)',  # rating: 0.8
+        ]
+        
+        score = None
+        for pattern in score_patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if match:
+                try:
+                    raw_score = float(match.group(1))
+                    # Normalize if model gave percentage (e.g., 75 instead of 0.75)
+                    if raw_score > 1.0:
+                        raw_score = raw_score / 100.0
+                    score = max(0.0, min(1.0, raw_score))
+                    break
+                except (ValueError, TypeError):
+                    continue
+        
+        # Strategy 2: If no explicit score, look for standalone decimal numbers
+        if score is None:
+            decimal_matches = re.findall(r'\b(0\.\d{1,4}|1\.0{0,4})\b', text)
+            if decimal_matches:
+                # Take the first reasonable score-like number
+                for match in decimal_matches:
+                    try:
+                        candidate = float(match)
+                        if 0.0 <= candidate <= 1.0:
+                            score = candidate
+                            break
+                    except ValueError:
+                        continue
+        
+        # Strategy 3: Last resort - check for common score words
+        if score is None:
+            if any(word in text.lower() for word in ['perfect', 'excellent', 'flawless']):
+                score = 1.0
+            elif any(word in text.lower() for word in ['good', 'solid', 'acceptable']):
+                score = 0.7
+            elif any(word in text.lower() for word in ['poor', 'weak', 'flawed']):
+                score = 0.3
+            elif any(word in text.lower() for word in ['reject', 'terrible', 'failed']):
+                score = 0.0
+            else:
+                score = 0.5  # Default neutral
+        
+        # Extract critique: find meaningful text that isn't JSON structure
+        critique_lines = []
+        in_json = False
+        json_depth = 0
+        
+        for line in text.split('\n'):
+            line_stripped = line.strip()
+            
+            # Track JSON boundaries
+            json_depth += line_stripped.count('{') - line_stripped.count('}')
+            json_depth += line_stripped.count('[') - line_stripped.count(']')
+            
+            # Skip pure JSON lines
+            if re.match(r'^[\s{},:\[\]"0-9.\-]+$', line_stripped):
+                continue
+            if re.match(r'^\s*"(score|verdict|remaining_issues|what_was_done_well|critique)"\s*:', line_stripped, flags=re.IGNORECASE):
+                continue
+            if line_stripped in ['{', '}', '[', ']', '']:
+                continue
+            
+            # Keep substantive lines outside JSON
+            if len(line_stripped) > 20 and not line_stripped.startswith('```'):
+                critique_lines.append(line_stripped)
+        
+        # Build critique from extracted lines
+        if critique_lines:
+            critique = ' '.join(critique_lines[:10])  # Limit to first 10 lines
+            if len(critique) > 500:
+                critique = critique[:500].rstrip() + "..."
+        else:
+            # Fallback: extract the "critique" field value if present
+            critique_match = re.search(r'"critique"\s*[:=]\s*"([^"]*(?:\\"[^"]*)*)"', text)
+            if critique_match:
+                critique = critique_match.group(1).replace('\\"', '"')
+            else:
+                critique = "Fallback: Could not extract structured critique from response."
+        
+        # Clean up critique
+        critique = re.sub(r'\n{3,}', '\n\n', critique).strip()
+        if not critique or len(critique) < 10:
+            critique = "Model provided minimal feedback in fallback mode."
+        
         return score, critique
+
+    def _recover_synthesizer_proposal(self, raw: str) -> tuple[str, str]:
+        """
+        Ultra-robust extraction for synthesizer responses when JSON parsing fails.
+        Returns (proposal, rationale) tuple.
+        """
+        if not raw or not isinstance(raw, str):
+            return "", "Fallback: Empty or invalid response"
+        
+        text = raw.strip()
+        proposal = ""
+        rationale = ""
+        
+        # Strategy 1: Look for "proposal" field value in broken JSON
+        # Handle both escaped and unescaped quotes
+        proposal_patterns = [
+            r'"proposal"\s*[:=]\s*"((?:[^"\\]|\\.)*)"',  # Normal escaped quotes
+            r'"proposal"\s*[:=]\s*"([^"]*)"',             # Simple case
+            r'"proposal"\s*[:=]\s*([^{][^\n]*)',          # Unquoted until newline
+        ]
+        
+        for pattern in proposal_patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL)
+            if match:
+                try:
+                    proposal = match.group(1).replace('\\"', '"').replace('\\n', '\n')
+                    if len(proposal) > 100:
+                        break
+                except Exception:
+                    pass
+        
+        # Strategy 2: If no proposal field, look for substantive text blocks
+        if not proposal or len(proposal) < 100:
+            # Remove JSON structure markers
+            cleaned = re.sub(r'\{[^{}]*\}', '', text)
+            cleaned = re.sub(r'\[[^\[\]]*\]', '', cleaned)
+            cleaned = re.sub(r'["{},:]', ' ', cleaned)
+            cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+            
+            # Find long paragraphs
+            paragraphs = [p.strip() for p in cleaned.split('\n\n') if len(p.strip()) > 200]
+            if paragraphs:
+                proposal = paragraphs[0]
+        
+        # Strategy 3: Extract rationale/justification
+        rationale_patterns = [
+            r'"rationale"\s*[:=]\s*"((?:[^"\\]|\\.)*)"',
+            r'"rationale"\s*[:=]\s*"([^"]*)"',
+            r'(?:justification|reasoning|why)[\s:]+([^\n]{50,})',
+        ]
+        
+        for pattern in rationale_patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL)
+            if match:
+                try:
+                    rationale = match.group(1).replace('\\"', '"').replace('\\n', '\n')
+                    if len(rationale) > 50:
+                        break
+                except Exception:
+                    pass
+        
+        # Fallbacks
+        if not proposal or len(proposal) < 50:
+            # Last resort: use entire text as proposal
+            proposal = text[:4000] if len(text) > 4000 else text
+        
+        if not rationale or len(rationale) < 20:
+            rationale = "Fallback: Could not extract structured rationale from malformed response."
+        
+        # Clean up
+        proposal = re.sub(r'\n{3,}', '\n\n', proposal).strip()
+        rationale = re.sub(r'\n{3,}', '\n\n', rationale).strip()
+        
+        return proposal, rationale
+
+    def _recover_brainstorm_from_text(self, raw: str) -> str:
+        """
+        Extract idea content from malformed brainstorm responses.
+        Uses multiple strategies to find the substantive proposal text.
+        """
+        if not raw or not isinstance(raw, str):
+            return ""
+        
+        text = raw.strip()
+        
+        # Strategy 1: Look for "idea" field value in broken JSON
+        idea_match = re.search(r'"idea"\s*[:=]\s*"((?:[^"\\]|\\.)*)"', text)
+        if idea_match:
+            try:
+                idea = idea_match.group(1).replace('\\"', '"').replace('\\n', '\n')
+                if len(idea) > 50:
+                    return idea
+            except Exception:
+                pass
+        
+        # Strategy 2: Extract text after common markers
+        markers = [
+            r"(?:###)?\s*IDEA\s*:?",
+            r"(?:###)?\s*PROPOSAL\s*:?",
+            r"(?:###)?\s*SOLUTION\s*:?",
+            r"(?:My |Our )?(?:best |proposed )?(?:solution|approach|idea)[\s:]+",
+        ]
+        
+        for marker_pattern in markers:
+            match = re.search(marker_pattern, text, flags=re.IGNORECASE)
+            if match:
+                start_pos = match.end()
+                # Find where JSON structure starts (if any)
+                next_json = text.find('{', start_pos)
+                if next_json > start_pos and next_json - start_pos < 50:
+                    candidate = text[start_pos:next_json].strip()
+                else:
+                    # Take everything after marker until end or next section
+                    candidate = text[start_pos:].split('\n##')[0].strip()
+                
+                if len(candidate) > 100:
+                    return candidate
+        
+        # Strategy 3: Extract longest substantive paragraph
+        paragraphs = [p.strip() for p in text.split('\n\n') if len(p.strip()) > 100]
+        if paragraphs:
+            # Return the longest paragraph that doesn't look like JSON
+            for para in sorted(paragraphs, key=len, reverse=True):
+                if not para.startswith('{') and '"' not in para[:50]:
+                    return para
+        
+        # Strategy 4: Remove JSON structure and keep meaningful text
+        cleaned = re.sub(r'\{[^{}]*\}', '', text)  # Remove simple JSON objects
+        cleaned = re.sub(r'\[[^\[\]]*\]', '', cleaned)  # Remove arrays
+        cleaned = re.sub(r'["{},:]', ' ', cleaned)  # Remove JSON punctuation
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        
+        # Keep substantial chunks
+        sentences = [s.strip() for s in re.split(r'[.!?]+', cleaned) if len(s.strip()) > 50]
+        if sentences:
+            return '. '.join(sentences[:3]) + '.'
+        
+        # Last resort: return cleaned text
+        if len(cleaned) > 100:
+            return cleaned[:1000] + ('...' if len(cleaned) > 1000 else '')
+        
+        return ""
+
+    def _extract_reasoning_from_text(self, raw: str) -> str:
+        """Extract reasoning/justification from malformed brainstorm responses."""
+        if not raw or not isinstance(raw, str):
+            return ""
+        
+        text = raw.strip()
+        
+        # Try to extract "reasoning" field
+        reason_match = re.search(r'"reasoning"\s*[:=]\s*"([^"]*(?:\\"[^"]*)*)"', text)
+        if reason_match:
+            try:
+                return reason_match.group(1).replace('\\"', '"')
+            except Exception:
+                pass
+        
+        # Look for reasoning sections
+        markers = [
+            r"(?:###)?\s*REASONING\s*:?",
+            r"(?:###)?\s*JUSTIFICATION\s*:?",
+            r"(?:###)?\s*RATIONAL(?:E)?\s*:?",
+            r"(?:Why |Because |This approach )",
+        ]
+        
+        for marker_pattern in markers:
+            match = re.search(marker_pattern, text, flags=re.IGNORECASE)
+            if match:
+                start_pos = match.end()
+                # Take next paragraph or until next section
+                candidate = text[start_pos:].split('\n\n')[0].strip()
+                if len(candidate) > 50 and len(candidate) < 500:
+                    return candidate
+        
+        return ""
 
     def _recover_critique_payload(self, raw: str, mp: MemoryPalace, model_id: str) -> tuple[dict[str, dict[str, Any]], str]:
         score = self._extract_score_from_text(raw, default=0.5)
@@ -376,6 +664,12 @@ class CouncilOrchestrator:
 
         # ── Phase 0: Research ─────────────────────────────────────────────────
         self._phase_research(mp)
+        
+        # ── Document Ingestion (Phase 1 Feature) ────────────────────────────────
+        if self.document_ingestion_enabled and self.doc_engine:
+            self._emit_progress("documents", "Processing ingested documents")
+            self._phase_document_ingestion(mp)
+        
         self._save(mp)
 
         # ── Phase 1: Independent brainstorm ───────────────────────────────────
@@ -446,33 +740,84 @@ class CouncilOrchestrator:
             counter_queries=counter_queries,
         )
 
-        support_results = self.research.research(
-            supporting_queries,
-            results_per_query=self.results_per_query,
-            scrape_top_n=self.scrape_top_n,
-        )
-        counter_results = self.research.research(
-            counter_queries,
-            results_per_query=self.results_per_query,
-            scrape_top_n=self.scrape_top_n,
-        )
-        mp.add_research(support_results, stance="support")
-        mp.add_research(counter_results, stance="counter")
-        quality_score, quality_note = self._compute_evidence_quality(support_results, counter_results)
+        # Use iterative research for deeper investigation
+        logger.info("   Starting iterative deep-dive research...")
+        self._emit_progress("research", "Iterative deep-dive research initiated")
+        
+        all_support_results = []
+        all_counter_results = []
+        support_metadata = {}
+        counter_metadata = {}
+        
+        # Iterative research for supporting queries
+        for idx, query in enumerate(supporting_queries):
+            results, metadata = self.iterative_research_agent.iterative_research(
+                initial_query=query,
+                mp=mp,
+                base_results_per_query=self.results_per_query,
+                followup_results_per_query=3,
+            )
+            all_support_results.extend(results)
+            if idx == 0:
+                support_metadata = metadata
+        
+        # Iterative research for counter queries  
+        for idx, query in enumerate(counter_queries):
+            results, metadata = self.iterative_research_agent.iterative_research(
+                initial_query=query,
+                mp=mp,
+                base_results_per_query=self.results_per_query,
+                followup_results_per_query=3,
+            )
+            all_counter_results.extend(results)
+            if idx == 0:
+                counter_metadata = metadata
+        
+        # Deduplicate results by URL
+        seen_urls = set()
+        deduped_support = []
+        for r in all_support_results:
+            url = r.get("url", "")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                deduped_support.append(r)
+        
+        seen_urls = set()
+        deduped_counter = []
+        for r in all_counter_results:
+            url = r.get("url", "")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                deduped_counter.append(r)
+        
+        mp.add_research(deduped_support, stance="support")
+        mp.add_research(deduped_counter, stance="counter")
+        quality_score, quality_note = self._compute_evidence_quality(deduped_support, deduped_counter)
         mp.evidence_quality_score = quality_score
         mp.evidence_quality_note = quality_note
+        
+        # Store iteration metadata
+        mp.research_metadata = {
+            "support": support_metadata,
+            "counter": counter_metadata,
+            "total_support_results": len(deduped_support),
+            "total_counter_results": len(deduped_counter),
+        }
+        
         self._emit_progress(
             "research",
-            f"Collected {len(support_results)} supporting and {len(counter_results)} counter sources",
+            f"Iterative research complete: {len(deduped_support)} supporting and {len(deduped_counter)} counter sources",
+            support_count=len(deduped_support),
+            counter_count=len(deduped_counter),
         )
 
         # Summarize supporting + counter evidence with researcher model
-        if support_results or counter_results:
+        if deduped_support or deduped_counter:
             support_snippets = "\n\n".join(
-                f"[{r['title']}]\n{r['snippet']}" for r in support_results[:4]
+                f"[{r['title']}]\n{r['snippet']}" for r in deduped_support[:4]
             )
             counter_snippets = "\n\n".join(
-                f"[{r['title']}]\n{r['snippet']}" for r in counter_results[:4]
+                f"[{r['title']}]\n{r['snippet']}" for r in deduped_counter[:4]
             )
             summary_raw = self.client.generate(
                 self.researcher,
@@ -494,6 +839,49 @@ class CouncilOrchestrator:
             mp.adversarial_summary = summary_raw.strip()
             logger.info(f"   Adversarial summary: {mp.adversarial_summary[:80]}...")
             self._emit_progress("research", "Adversarial evidence summary ready")
+    
+    # ── Document Ingestion Phase (Phase 1 Feature) ────────────────────────────
+    
+    def _phase_document_ingestion(self, mp: MemoryPalace) -> None:
+        """
+        Process pre-loaded documents from the document ingestion engine.
+        Documents should be loaded via orchestrator.doc_engine.ingest() before run().
+        """
+        logger.info("\n── Document Ingestion ──────────────────────────────────────")
+        self._emit_progress("documents", "Formatting ingested documents for context")
+        
+        if not self.doc_engine or not self.doc_engine.parsed_documents:
+            logger.info("   No documents ingested; skipping document phase")
+            return
+        
+        # Format all chunks for context injection
+        formatted_context = self.doc_engine.format_chunks_for_context(
+            max_chunks=15,  # Limit to avoid context explosion
+            max_total_chars=10000
+        )
+        
+        # Convert parsed documents to dict format for Memory Palace
+        doc_dicts = []
+        for doc in self.doc_engine.parsed_documents.values():
+            doc_dicts.append({
+                "doc_id": doc.doc_id,
+                "title": doc.title,
+                "source": doc.source,
+                "source_type": doc.source_type,
+                "chunks": doc.chunks,
+                "metadata": doc.metadata,
+            })
+        
+        # Add to Memory Palace
+        mp.add_ingested_documents(doc_dicts)
+        
+        logger.info(f"   Ingested {len(doc_dicts)} documents with {sum(len(d['chunks']) for d in doc_dicts)} total chunks")
+        self._emit_progress(
+            "documents",
+            f"Loaded {len(doc_dicts)} documents into context",
+            doc_count=len(doc_dicts),
+            total_chunks=sum(len(d['chunks']) for d in doc_dicts),
+        )
 
     # ── Phase 1: Brainstorm ───────────────────────────────────────────────────
 
@@ -519,8 +907,12 @@ class CouncilOrchestrator:
                 idea      = data.get("idea", raw)
                 reasoning = data.get("reasoning", "")
             except ValueError:
-                logger.warning(f"   [{model.display_name}] JSON parse failed — using raw output")
-                idea, reasoning = raw, ""
+                logger.warning(f"   [{model.display_name}] JSON parse failed — applying robust extraction")
+                # Apply robust extraction for brainstorm responses
+                idea = self._recover_brainstorm_from_text(raw)
+                reasoning = self._extract_reasoning_from_text(raw)
+                if not idea or len(idea.strip()) < 50:
+                    idea = raw  # Last resort: use full raw text
 
             mp.add_idea(model.model_id, model.display_name, idea, reasoning)
             logger.info(f"   [{model.display_name}] idea captured ({len(idea)} chars)")
@@ -684,7 +1076,13 @@ class CouncilOrchestrator:
             data = self._extract_json_object(raw, "synthesizer")
             proposal, rationale = self._normalize_synthesizer_payload(data, raw)
         except ValueError:
-            proposal, rationale = raw, ""
+            logger.warning("   [Synthesizer] JSON parse failed — applying robust extraction")
+            # Apply dedicated synthesizer recovery method
+            proposal, rationale = self._recover_synthesizer_proposal(raw)
+            if not proposal or len(proposal.strip()) < 50:
+                proposal = raw  # Last resort: use full raw text
+            if not rationale or len(rationale.strip()) < 10:
+                rationale = "Fallback: Could not extract structured rationale from response."
 
         prop_idx = mp.add_synthesizer_proposal(proposal, rationale)
         logger.info(f"   [Synthesizer] proposal captured ({len(proposal)} chars)")
@@ -916,24 +1314,62 @@ def build_orchestrator_from_config(
     cfg = _load_yaml_config(Path(config_path))
     overrides = overrides or {}
 
-    council_cfg = cfg.get("council", [])
-    if council_cfg:
-        council = [
-            _build_model_config(item, ROLE_COUNCIL, DEFAULT_COUNCIL[idx % len(DEFAULT_COUNCIL)])
-            for idx, item in enumerate(council_cfg)
-        ]
+    # Check if tutor mode is enabled
+    tutor_mode_enabled = bool(overrides.get("tutor_mode_enabled", False))
+    
+    # Load tutor mode council if enabled, otherwise use regular council
+    if tutor_mode_enabled:
+        tutor_council_cfg = cfg.get("tutor_mode_council", [])
+        if tutor_council_cfg:
+            council = [
+                _build_model_config(item, ROLE_COUNCIL, DEFAULT_COUNCIL[idx % len(DEFAULT_COUNCIL)])
+                for idx, item in enumerate(tutor_council_cfg)
+            ]
+        else:
+            council = DEFAULT_COUNCIL
+            logger.warning("Tutor mode enabled but no tutor_mode_council config found; using default council")
     else:
-        council = DEFAULT_COUNCIL
+        council_cfg = cfg.get("council", [])
+        if council_cfg:
+            council = [
+                _build_model_config(item, ROLE_COUNCIL, DEFAULT_COUNCIL[idx % len(DEFAULT_COUNCIL)])
+                for idx, item in enumerate(council_cfg)
+            ]
+        else:
+            council = DEFAULT_COUNCIL
 
     ensure_future_you_seat = bool(cfg.get("council_features", {}).get("enable_future_you_seat", True))
-    if ensure_future_you_seat and not any(m.model_id == "future_you" for m in council):
+    # Only add Future You seat in regular mode, not tutor mode
+    if ensure_future_you_seat and not tutor_mode_enabled and not any(m.model_id == "future_you" for m in council):
         council = [*council, DEFAULT_COUNCIL[-1]]
 
-    synthesizer = _build_model_config(
-        cfg.get("synthesizer", {}),
-        ROLE_SYNTHESIZER,
-        DEFAULT_SYNTHESIZER,
-    )
+    # Use tutor-specific synthesizer if available in tutor mode
+    if tutor_mode_enabled:
+        tutor_synth_cfg = cfg.get("tutor_mode_synthesizer", {})
+        if tutor_synth_cfg:
+            synthesizer = _build_model_config(
+                tutor_synth_cfg,
+                ROLE_SYNTHESIZER,
+                DEFAULT_SYNTHESIZER,
+            )
+        else:
+            # Fallback to a lighter synthesizer for tutor mode
+            synthesizer = ModelConfig(
+                model_id="tutor_synthesizer",
+                ollama_name="gemma4-9b",
+                display_name="Gemma-4 9B (Tutor Synthesizer)",
+                role=ROLE_SYNTHESIZER,
+                context_size=8192,
+                temperature=0.65,
+                personality="",
+            )
+    else:
+        synthesizer = _build_model_config(
+            cfg.get("synthesizer", {}),
+            ROLE_SYNTHESIZER,
+            DEFAULT_SYNTHESIZER,
+        )
+    
     researcher = _build_model_config(
         cfg.get("researcher", {}),
         ROLE_RESEARCHER,
@@ -983,6 +1419,13 @@ def build_orchestrator_from_config(
         llm_model=memory_llm_model,
         embedder_model=memory_embedder_model,
     )
+    
+    # Document ingestion config (Phase 1 feature)
+    doc_ingestion_enabled = bool(
+        overrides.get("document_ingestion_enabled")
+        if overrides.get("document_ingestion_enabled") is not None
+        else cfg.get("features", {}).get("document_ingestion_enabled", False)
+    )
 
     return CouncilOrchestrator(
         council=council,
@@ -1002,6 +1445,7 @@ def build_orchestrator_from_config(
         project_root=str(Path(config_path).resolve().parent),
         progress_callback=progress_callback,
         memory_manager=memory_manager,
+        document_ingestion_enabled=doc_ingestion_enabled,
     )
 
 
@@ -1030,6 +1474,8 @@ def main():
     parser.add_argument("--memory-top-k", type=int, default=None,           help="Mem0 retrieval depth")
     parser.add_argument("--memory-llm", default=None,                       help="Mem0 local LLM model (Ollama)")
     parser.add_argument("--memory-embedder", default=None,                  help="Mem0 local embedding model (Ollama)")
+    parser.add_argument("--documents", nargs="*", default=[],                help="Document paths/URLs to ingest (PDF, DOCX, TXT, MD, GitHub URLs)")
+    parser.add_argument("--document-ingestion", action="store_true",         help="Enable document ingestion feature")
     args = parser.parse_args()
 
     memory_enabled_override = None
@@ -1058,8 +1504,19 @@ def main():
             "memory_top_k": args.memory_top_k,
             "memory_llm_model": args.memory_llm,
             "memory_embedder_model": args.memory_embedder,
+            "document_ingestion_enabled": args.document_ingestion or bool(args.documents),
         },
     )
+    
+    # Pre-load documents if provided
+    if args.documents and orchestrator.doc_engine:
+        logger.info(f"Loading {len(args.documents)} documents...")
+        for doc_source in args.documents:
+            try:
+                orchestrator.doc_engine.ingest(doc_source)
+                logger.info(f"  ✓ Loaded: {doc_source}")
+            except Exception as e:
+                logger.error(f"  ✗ Failed to load {doc_source}: {e}")
 
     print("\n" + "═" * 70)
     print("  LLM COUNCIL — Starting session")
